@@ -98,8 +98,41 @@ MAX_FEATURES = 0.7           # Persentase fitur yang digunakan (0.7 = 70%)
 TOP_FEATURES_PCT = 0.5       # Ambil 50% top features saja untuk mengurangi overfitting
 
 # --- Notification ---
-TG_TOKEN = '7859663172:AAEsL9e0tp3azEdYp6-BdeIjSDZ9pPqcgcQ'
+TG_TOKEN = '8157810799:AAH3z1dE2J14PIx7qhf2XnSdzjx-a9G9A4c'
 TG_CHATID = '6271836846'
+
+# --- Logging ---
+LOG_DEBUG = True  # Set ke False jika tidak ingin log debug
+
+def log_telegram(level, message, data=None):
+    """
+    Kirim log ke Telegram dengan level dan data opsional.
+    level: INFO, WARNING, ERROR, DEBUG
+    message: pesan utama
+    data: dict opsional untuk detail tambahan
+    """
+    try:
+        import requests
+        level_emoji = {
+            'INFO': 'ℹ️',
+            'WARNING': '⚠️',
+            'ERROR': '❌',
+            'DEBUG': '🐞',
+        }
+        emoji = level_emoji.get(level.upper(), '')
+        msg = f"<b>[{level.upper()}]</b> {emoji} {message}"
+        if data:
+            # Format data dict ke string
+            details = '\n'.join([f"<b>{k}</b>: {v}" for k, v in data.items()])
+            msg += f"\n<pre>{details}</pre>"
+        # Untuk DEBUG, hanya kirim jika LOG_DEBUG True
+        if level.upper() == 'DEBUG' and not LOG_DEBUG:
+            return
+        url = f'https://api.telegram.org/bot{TG_TOKEN}/sendMessage'
+        payload = {'chat_id': TG_CHATID, 'text': msg, 'parse_mode':'HTML'}
+        requests.post(url, data=payload, timeout=10)
+    except Exception as e:
+        print(f"[Log Telegram Error] {e}")
 
 # Fungsi untuk cek koneksi Telegram
 def check_telegram_connection():
@@ -114,7 +147,7 @@ def check_telegram_connection():
                 bot_username = data['result']['username']
                 print(f"[Telegram] Koneksi berhasil! Bot name: {bot_name} (@{bot_username})")
                 # Kirim pesan tes
-                send_telegram(f"🔄 Bot Trading MEXC terhubung!\nBot siap menerima notifikasi.")
+                send_telegram(f"🔄 Bot Trading Binance terhubung!\nBot siap menerima notifikasi.")
                 return True
             else:
                 print(f"[Telegram] Koneksi gagal: {data.get('description', 'Unknown error')}")
@@ -130,10 +163,6 @@ IS_LIVE = IS_LIVE_DEFAULT  # Akan diaktifkan dengan parameter --live
 SAVE_MODEL = True            # Simpan model ML untuk digunakan lagi
 PLOT_RESULTS = True          # Plot equity curve dan metrik lainnya
 SAVE_RESULTS = True          # Simpan hasil backtest ke CSV
-
-# --- Aktifkan bot dengan perintah: ---
-# Simulasi: python main.py
-# Live Trading: python main.py --live
 
 # --- Output Directory ---
 OUTPUT_DIR = 'results'       # Direktori untuk menyimpan hasil
@@ -1453,6 +1482,10 @@ def run_strategy(pair=PAIR, timeframe=TIMEFRAME, data_limit=DATA_LIMIT, initial_
     Fungsi utama untuk menjalankan strategi
     """
     print(f"\n{'='*20} RUNNING STRATEGY: {pair} {timeframe} {'='*20}")
+    log_telegram('INFO', f"Bot trading dimulai untuk {pair} {timeframe}", {
+        'Mode': 'LIVE' if IS_LIVE else 'SIMULASI',
+        'Initial Capital': initial_capital
+    })
     
     # Kirim notifikasi Telegram saat memulai strategi
     send_telegram(f"🚀 BOT TRADING DIMULAI\nPair: {pair}\nTimeframe: {timeframe}\nMode: {'LIVE' if IS_LIVE else 'SIMULASI'}")
@@ -1472,10 +1505,18 @@ def run_strategy(pair=PAIR, timeframe=TIMEFRAME, data_limit=DATA_LIMIT, initial_
     # Step 3: Training model ensemble dan deep learning
     print("Training model ensemble dan deep learning...")
     models, features, feature_imp, scaler = train_ml_advanced(df, use_cv=True)
+    log_telegram('INFO', "Training model selesai", {
+        'Fitur': len(features),
+        'Model': ', '.join(models.keys())
+    })
     
     # Step 4: Generate signals menggunakan ensemble prediction
     df = generate_signals_ensemble(df, models, features, scaler)
     trades_df, positions_df, equity_df = run_backtest(df, initial_capital)
+    log_telegram('INFO', "Backtest selesai", {
+        'Final Capital': equity_df['equity'].iloc[-1],
+        'Total Trades': len(positions_df)
+    })
     
     # Analisis hasil
     final_capital = equity_df['equity'].iloc[-1]
@@ -1556,6 +1597,7 @@ if IS_LIVE:
             print("Semua model berhasil divalidasi!")
         except Exception as e:
             print(f"Error loading/validating model: {e}")
+            log_telegram('ERROR', 'Error loading/validating model', {'error': str(e)})
             send_telegram(f"⚠️ <b>Error Loading Model</b>\n{PAIR} {TIMEFRAME}\n{str(e)}\nMemulai training baru...")
             df = get_data_ccxt(symbol=PAIR, timeframe=TIMEFRAME, limit=DATA_LIMIT)
             multi_tf_data = get_multi_timeframe_data(symbol=PAIR, base_timeframe=TIMEFRAME, limit=DATA_LIMIT)
@@ -1595,7 +1637,8 @@ if IS_LIVE:
         except Exception as e:
             print(f"Error loading bot state: {e}")
 
-    while not trade_done:
+    trade_counter = 0  # Hitung jumlah trade
+    while True:
         try:
             df = get_data_ccxt(symbol=PAIR, timeframe=TIMEFRAME, limit=DATA_LIMIT)
             multi_tf_data = get_multi_timeframe_data(symbol=PAIR, base_timeframe=TIMEFRAME, limit=100)
@@ -1620,8 +1663,15 @@ if IS_LIVE:
                 df['pred_proba'] = ensemble_proba
                 df['pred'] = (ensemble_proba > 0.5).astype(int)
                 df['signal'] = df['pred'].map({1:'buy', 0:'hold'})
+                # Tambah log debug prediksi
+                log_telegram('DEBUG', 'Prediksi model', {
+                    'proba': float(ensemble_proba[-1]),
+                    'signal': df['signal'].iloc[-1],
+                    'close': float(df['close'].iloc[-1])
+                })
             except Exception as e:
                 print(f"Error saat prediksi: {str(e)}")
+                log_telegram('ERROR', 'Error saat prediksi', {'error': str(e)})
                 df['pred_proba'] = 0.5
                 df['pred'] = 0
                 df['signal'] = 'hold'
@@ -1671,8 +1721,14 @@ if IS_LIVE:
                                    f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                             print(msg)
                             send_telegram(msg)
+                            log_telegram('INFO', 'ENTRY BUY', {
+                                'entry_price': entry_price,
+                                'qty': qty,
+                                'confidence': latest['pred_proba']
+                            })
                         except Exception as e:
                             print(f"[!] Order gagal: {e}")
+                            log_telegram('ERROR', 'Order BUY gagal', {'error': str(e)})
                             send_telegram(f"⚠️ <b>Bot Order Error</b>\n{PAIR} {TIMEFRAME}\n{e}")
                     elif current_position is not None:
                         exit_reason = None
@@ -1714,12 +1770,52 @@ if IS_LIVE:
                                        f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                                 print(msg)
                                 send_telegram(msg)
-                                trade_done = True  # Selesai 1 trading, keluar loop
+                                log_telegram('INFO', f'EXIT {exit_reason}', {
+                                    'exit_price': last_price,
+                                    'pnl': profit,
+                                    'pnl_pct': profit_pct
+                                })
+                                trade_counter += 1
+                                # Kirim ringkasan hasil setiap 10 trade atau setiap exit
+                                if trade_counter % 10 == 0 or trade_counter == 1:
+                                    # Hitung ringkasan
+                                    pos_df = pd.DataFrame(bot_state['positions'])
+                                    if not pos_df.empty:
+                                        win_trades = len(pos_df[pos_df['pnl'] > 0])
+                                        loss_trades = len(pos_df[pos_df['pnl'] <= 0])
+                                        total_trades = len(pos_df)
+                                        win_rate = win_trades / total_trades * 100 if total_trades > 0 else 0
+                                        avg_profit = pos_df['pnl_pct'].mean()
+                                        max_profit = pos_df['pnl_pct'].max()
+                                        max_loss = pos_df['pnl_pct'].min()
+                                        profit_factor = abs(pos_df[pos_df['pnl'] > 0]['pnl'].sum() / pos_df[pos_df['pnl'] < 0]['pnl'].sum()) if len(pos_df[pos_df['pnl'] < 0]) > 0 else float('inf')
+                                        net_profit = pos_df['pnl'].sum()
+                                        summary_msg = (
+                                            f"📊 <b>RINGKASAN TRADING</b>\n"
+                                            f"Pair: {PAIR}\n"
+                                            f"Timeframe: {TIMEFRAME}\n"
+                                            f"Total Trades: {total_trades}\n"
+                                            f"Win Rate: {win_rate:.2f}%\n"
+                                            f"Avg Profit: {avg_profit:.2f}%\n"
+                                            f"Max Profit: {max_profit:.2f}%\n"
+                                            f"Max Loss: {max_loss:.2f}%\n"
+                                            f"Profit Factor: {profit_factor:.2f}\n"
+                                            f"Net Profit: ${net_profit:.2f}\n"
+                                            f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                                        )
+                                        send_telegram(summary_msg)
+                                        log_telegram('INFO', 'Ringkasan trading', {
+                                            'Total Trades': total_trades,
+                                            'Win Rate': f'{win_rate:.2f}%',
+                                            'Net Profit': f'${net_profit:.2f}'
+                                        })
                             except Exception as e:
                                 print(f"[!] Exit order gagal: {e}")
+                                log_telegram('ERROR', 'Order SELL gagal', {'error': str(e)})
                                 send_telegram(f"⚠️ <b>Bot Exit Error</b>\n{PAIR} {TIMEFRAME}\n{e}")
                 except Exception as e:
                     print(f"[!!] Error balance: {e}")
+                    log_telegram('ERROR', 'Error balance', {'error': str(e)})
                     send_telegram(f"⚠️ <b>Bot Balance Error</b>\n{PAIR} {TIMEFRAME}\n{e}")
             try:
                 joblib.dump(bot_state, state_file)
@@ -1727,6 +1823,7 @@ if IS_LIVE:
                 print(f"Error saving bot state: {e}")
         except Exception as e:
             print(f"[!!] Error main loop: {e}")
+            log_telegram('ERROR', 'Error di main loop', {'error': str(e)})
             send_telegram(f"[Bot Error]\n{PAIR} {TIMEFRAME}\n{e}")
         # Jeda sesuai timeframe
         sleep_seconds = 60
@@ -1736,6 +1833,6 @@ if IS_LIVE:
             sleep_seconds = int(TIMEFRAME.replace('h', '')) * 3600 // 10
         print(f"Sleeping for {sleep_seconds} seconds...")
         time.sleep(sleep_seconds)
-    print("=== 1x Trading Selesai, Bot Berhenti ===")
+    # Tidak ada print selesai, karena loop berjalan terus
 else:
     print("--- Simulasi selesai. Aktifkan IS_LIVE untuk menjalankan trading nyata. ---")
