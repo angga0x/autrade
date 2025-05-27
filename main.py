@@ -1500,22 +1500,36 @@ def run_strategy(pair=PAIR, timeframe=TIMEFRAME, data_limit=DATA_LIMIT, initial_
         'Mode': 'LIVE' if IS_LIVE else 'SIMULASI',
         'Initial Capital': initial_capital
     })
-    
-    # Kirim notifikasi Telegram saat memulai strategi
-    send_telegram(f"🚀 BOT TRADING DIMULAI\nPair: {pair}\nTimeframe: {timeframe}\nMode: {'LIVE' if IS_LIVE else 'SIMULASI'}")
-    
     # Step 1: Load data dari berbagai timeframe
     print("Loading data multi-timeframe...")
     df = get_data_ccxt(symbol=pair, timeframe=timeframe, limit=data_limit)
-    
+    print(f'Jumlah data setelah load: {len(df)}')
+    if df is None or df.empty or len(df) < 100:
+        msg = (f"❌ Data terlalu sedikit setelah load ({len(df)} baris).\n"
+               f"Cek koneksi, pair, timeframe, atau naikkan DATA_LIMIT.")
+        print(msg)
+        send_telegram(msg)
+        return None, None, None, None, None, None, None, None
     # Get data dari timeframe yang lebih tinggi untuk analisis multi-timeframe
     multi_tf_data = get_multi_timeframe_data(symbol=pair, base_timeframe=timeframe, limit=data_limit)
-    
     # Step 2: Feature engineering dengan data multi-timeframe
     print("Memproses indikator teknikal...")
     df = feature_engineering(df, multi_tf_data)
+    print(f'Jumlah data setelah feature engineering: {len(df)}')
+    if df is None or df.empty or len(df) < 100:
+        msg = (f"❌ Data terlalu sedikit setelah feature engineering ({len(df)} baris).\n"
+               f"Cek DATA_LIMIT atau proses feature engineering.")
+        print(msg)
+        send_telegram(msg)
+        return None, None, None, None, None, None, None, None
     df = label_target(df, threshold=TARGET_THRESHOLD)
-    
+    print(f'Jumlah data setelah label_target: {len(df)}')
+    if df is None or df.empty or len(df) < 100:
+        msg = (f"❌ Data terlalu sedikit setelah label_target ({len(df)} baris).\n"
+               f"Cek threshold atau DATA_LIMIT.")
+        print(msg)
+        send_telegram(msg)
+        return None, None, None, None, None, None, None, None
     # Step 3: Training model ensemble dan deep learning
     print("Training model ensemble dan deep learning...")
     models, features, feature_imp, scaler = train_ml_advanced(df, use_cv=True)
@@ -1523,7 +1537,6 @@ def run_strategy(pair=PAIR, timeframe=TIMEFRAME, data_limit=DATA_LIMIT, initial_
         'Fitur': len(features),
         'Model': ', '.join(models.keys())
     })
-    
     # Step 4: Generate signals menggunakan ensemble prediction
     df = generate_signals_ensemble(df, models, features, scaler)
     trades_df, positions_df, equity_df = run_backtest(df, initial_capital)
@@ -1531,322 +1544,24 @@ def run_strategy(pair=PAIR, timeframe=TIMEFRAME, data_limit=DATA_LIMIT, initial_
         'Final Capital': equity_df['equity'].iloc[-1],
         'Total Trades': len(positions_df)
     })
-    
     # Analisis hasil
     final_capital = equity_df['equity'].iloc[-1]
-    print_backtest_results(positions_df, initial_capital, final_capital, pair, timeframe)
-    
+    print_backtest_results(positions_df, initial_capital, final_capital, pair, timeframe, df)
     # Plot hasil
     plot_equity_curve(equity_df, pair, timeframe)
     plot_trade_analysis(positions_df, pair, timeframe)
-    
     return models, features, feature_imp, scaler, df, trades_df, positions_df, equity_df
 
-# ========== SIMULASI/BACKTEST ==========
-# Cek koneksi Telegram terlebih dahulu
-print("\n----- Cek Koneksi Telegram -----")
-telegram_connected = check_telegram_connection()
-print(f"Status Telegram: {'TERHUBUNG' if telegram_connected else 'GAGAL TERHUBUNG'}")
-
-# Jalankan strategi dengan parameter default
-models, features, feature_imp, scaler, df, trades_df, positions_df, equity_df = run_strategy()
-
-# ========== 2. UPGRADE KE BOT TRADING REAL-TIME ==========
-if IS_LIVE:
-    binance = ccxt.binance({
-        'apiKey': API_KEY,
-        'secret': API_SECRET,
-        'enableRateLimit': True,
-    })
-
-    # Kirim notifikasi Telegram mode live
-    send_telegram(f"🔴 <b>BOT TRADING LIVE DIAKTIFKAN</b>\n\nPair: {PAIR}\nTimeframe: {TIMEFRAME}\nModal: ${TRADE_AMOUNT}\nStop Loss: {STOP_LOSS_PCT*100}%\nTake Profit: {TAKE_PROFIT_PCT*100}%")
-
-    # Load model dari file jika tersedia
-    model_files = [f for f in os.listdir(OUTPUT_DIR) if f.startswith(f"models_{PAIR.replace('/','_')}_{TIMEFRAME}") and f.endswith(".joblib")]
-    scaler_files = [f for f in os.listdir(OUTPUT_DIR) if f.startswith(f"scaler_{PAIR.replace('/','_')}_{TIMEFRAME}") and f.endswith(".joblib")]
-    features_files = [f for f in os.listdir(OUTPUT_DIR) if f.startswith(f"features_{PAIR.replace('/','_')}_{TIMEFRAME}") and f.endswith(".joblib")]
-
-    if model_files and scaler_files and os.path.exists(f"{OUTPUT_DIR}/{model_files[-1]}") and os.path.exists(f"{OUTPUT_DIR}/{scaler_files[-1]}"):
-        latest_model = model_files[-1]
-        latest_scaler = scaler_files[-1]
-        try:
-            print(f"Loading model dari {latest_model}...")
-            models = joblib.load(f"{OUTPUT_DIR}/{latest_model}")
-            scaler = joblib.load(f"{OUTPUT_DIR}/{latest_scaler}")
-            # Load fitur dari file jika ada
-            if features_files:
-                features = joblib.load(f"{OUTPUT_DIR}/{features_files[-1]}")
-                print(f"Fitur loaded dari file: {len(features)} fitur")
-            else:
-                # Fallback: load dari feature importance
-                imp_files = [f for f in os.listdir(OUTPUT_DIR) if f.startswith(f"feature_importance_{PAIR.replace('/','_')}_{TIMEFRAME}") and f.endswith(".csv")]
-                if imp_files:
-                    feature_imp = pd.read_csv(f"{OUTPUT_DIR}/{imp_files[-1]}", index_col=0)
-                    features = select_features(None, feature_imp)
-                    print(f"Menggunakan {len(features)} fitur teratas dari feature importance")
-                else:
-                    print("Tidak menemukan file fitur, training ulang untuk mendapatkan fitur")
-                    df_temp = get_data_ccxt(symbol=PAIR, timeframe=TIMEFRAME, limit=200)
-                    multi_tf_data = get_multi_timeframe_data(symbol=PAIR, base_timeframe=TIMEFRAME, limit=200)
-                    df_temp = feature_engineering(df_temp, multi_tf_data)
-                    df_temp = label_target(df_temp)
-                    features = select_features(df_temp)
-                    print(f"Menggunakan {len(features)} fitur dari data training baru")
-            # Validasi model dan scaler
-            df_test = get_data_ccxt(symbol=PAIR, timeframe=TIMEFRAME, limit=30)
-            df_test = feature_engineering(df_test, None)
-            for f in features:
-                if f not in df_test.columns:
-                    df_test[f] = 0
-            df_test = df_test.dropna()
-            if len(df_test) == 0:
-                print('Data untuk validasi model kosong, skip validasi.')
-            else:
-                test_X = df_test[features]
-                test_X_scaled = scaler.transform(test_X)
-                for model_name, model in models.items():
-                    if model_name != 'lstm' and model_name != 'lstm_seq_length':
-                        _ = model.predict_proba(test_X_scaled)
-            print("Semua model berhasil divalidasi!")
-        except Exception as e:
-            print(f"Error loading/validating model: {e}")
-            log_telegram('ERROR', 'Error loading/validating model', {'error': str(e)})
-            send_telegram(f"⚠️ <b>Error Loading Model</b>\n{PAIR} {TIMEFRAME}\n{str(e)}\nMemulai training baru...")
-            df = get_data_ccxt(symbol=PAIR, timeframe=TIMEFRAME, limit=DATA_LIMIT)
-            multi_tf_data = get_multi_timeframe_data(symbol=PAIR, base_timeframe=TIMEFRAME, limit=DATA_LIMIT)
-            df = feature_engineering(df, multi_tf_data)
-            df = label_target(df)
-            models, features, feature_imp, scaler = train_ml_advanced(df, use_cv=True)
+if __name__ == "__main__":
+    # ... existing code ...
+    if len(sys.argv) > 1 and sys.argv[1] == '--live':
+        print("=== MODE LIVE TRADING DIAKTIFKAN ===")
+        IS_LIVE_DEFAULT = True
     else:
-        print("Tidak ada model tersimpan, training model baru...")
-        df = get_data_ccxt(symbol=PAIR, timeframe=TIMEFRAME, limit=DATA_LIMIT)
-        multi_tf_data = get_multi_timeframe_data(symbol=PAIR, base_timeframe=TIMEFRAME, limit=DATA_LIMIT)
-        df = feature_engineering(df, multi_tf_data)
-        df = label_target(df)
-        models, features, feature_imp, scaler = train_ml_advanced(df, use_cv=True)
+        IS_LIVE_DEFAULT = False
 
-    print(f"BOT TRADING AKTIF. Running real-time untuk {PAIR} di {TIMEFRAME}...")
-    last_timestamp = None
-    positions = []
-    current_position = None
-    trade_done = False  # Hanya lakukan 1 trading
-
-    # Simpan state bot
-    bot_state = {
-        'last_timestamp': None,
-        'current_position': None,
-        'trades': [],
-        'positions': [],
-        'start_capital': 0,
-        'current_capital': 0
-    }
-    state_file = f"{OUTPUT_DIR}/bot_state_{PAIR.replace('/','_')}_{TIMEFRAME}.joblib"
-    if os.path.exists(state_file):
-        try:
-            bot_state = joblib.load(state_file)
-            print(f"Bot state dimuat dari {state_file}")
-            last_timestamp = bot_state['last_timestamp']
-            current_position = bot_state['current_position']
-        except Exception as e:
-            print(f"Error loading bot state: {e}")
-
-    trade_counter = 0  # Hitung jumlah trade
-    while True:
-        try:
-            df = get_data_ccxt(symbol=PAIR, timeframe=TIMEFRAME, limit=DATA_LIMIT)
-            multi_tf_data = get_multi_timeframe_data(symbol=PAIR, base_timeframe=TIMEFRAME, limit=100)
-            df = feature_engineering(df, multi_tf_data)
-            # Pastikan semua fitur tersedia dan urutannya sama
-            for f in features:
-                if f not in df.columns:
-                    df[f] = 0
-            X = df[features]
-            try:
-                X_scaled = scaler.transform(X)
-                ensemble_proba = 0
-                model_count = 0
-                for model_name, model in models.items():
-                    if model_name != 'lstm' and model_name != 'lstm_seq_length':
-                        proba = model.predict_proba(X_scaled)[:, 1]
-                        weight = 0.3 if model_name in ['rf', 'gb', 'xgb'] else 0.1
-                        ensemble_proba += proba * weight
-                        model_count += weight
-                if model_count > 0:
-                    ensemble_proba = ensemble_proba / model_count
-                df['pred_proba'] = ensemble_proba
-                df['pred'] = (ensemble_proba > 0.5).astype(int)
-                df['signal'] = df['pred'].map({1:'buy', 0:'hold'})
-                # Tambah log debug prediksi
-                log_telegram('DEBUG', 'Prediksi model', {
-                    'proba': float(ensemble_proba[-1]),
-                    'signal': df['signal'].iloc[-1],
-                    'close': float(df['close'].iloc[-1])
-                })
-            except Exception as e:
-                print(f"Error saat prediksi: {str(e)}")
-                log_telegram('ERROR', 'Error saat prediksi', {'error': str(e)})
-                df['pred_proba'] = 0.5
-                df['pred'] = 0
-                df['signal'] = 'hold'
-            latest = df.iloc[-1]
-            if last_timestamp == latest.name:
-                print(f"Belum ada candle baru. Menunggu...")
-            else:
-                last_signal = latest['signal']
-                last_price = float(latest['close'])
-                last_timestamp = latest.name
-                bot_state['last_timestamp'] = last_timestamp
-                try:
-                    balance = binance.fetch_balance()
-                    free_usdt = balance['total']['USDT']
-                    if bot_state['start_capital'] == 0:
-                        bot_state['start_capital'] = free_usdt
-                    bot_state['current_capital'] = free_usdt
-                    if current_position is None and last_signal == 'buy' and free_usdt >= TRADE_AMOUNT and latest['pred_proba'] >= 0.6:
-                        entry_price = last_price
-                        position_size = min(TRADE_AMOUNT, free_usdt)
-                        fee = position_size * TRADING_FEE
-                        actual_position = position_size - fee
-                        qty = actual_position / entry_price
-                        stop_loss = entry_price * (1 - STOP_LOSS_PCT)
-                        take_profit = entry_price * (1 + TAKE_PROFIT_PCT)
-                        try:
-                            order = binance.create_market_buy_order(PAIR, TRADE_AMOUNT/entry_price)
-                            current_position = {
-                                'entry_date': latest.name,
-                                'entry_price': entry_price,
-                                'position_size': actual_position,
-                                'qty': qty,
-                                'stop_loss': stop_loss,
-                                'take_profit': take_profit,
-                                'order_id': order['id'] if 'id' in order else None,
-                                'confidence': latest['pred_proba']
-                            }
-                            bot_state['current_position'] = current_position
-                            msg = (f"🔵 <b>BOT ENTRY BUY</b>\n"
-                                   f"Pair: {PAIR}\n"
-                                   f"Timeframe: {TIMEFRAME}\n"
-                                   f"💰 Entry: ${entry_price:.2f}\n"
-                                   f"🔢 Qty: {qty:.6f}\n"
-                                   f"📈 TP: ${take_profit:.2f}\n"
-                                   f"📉 SL: ${stop_loss:.2f}\n"
-                                   f"🎯 Confidence: {latest['pred_proba']:.2f}\n"
-                                   f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                            print(msg)
-                            send_telegram(msg)
-                            log_telegram('INFO', 'ENTRY BUY', {
-                                'entry_price': entry_price,
-                                'qty': qty,
-                                'confidence': latest['pred_proba']
-                            })
-                        except Exception as e:
-                            print(f"[!] Order gagal: {e}")
-                            log_telegram('ERROR', 'Order BUY gagal', {'error': str(e)})
-                            send_telegram(f"⚠️ <b>Bot Order Error</b>\n{PAIR} {TIMEFRAME}\n{e}")
-                    elif current_position is not None:
-                        exit_reason = None
-                        if last_price >= current_position['take_profit']:
-                            exit_reason = 'TP'
-                        elif last_price <= current_position['stop_loss']:
-                            exit_reason = 'SL'
-                        elif last_signal == 'hold' and (1 - latest['pred_proba']) >= 0.6:
-                            exit_reason = 'Signal'
-                        if exit_reason:
-                            try:
-                                order = binance.create_market_sell_order(PAIR, current_position['qty'])
-                                exit_value = current_position['qty'] * last_price
-                                fee = exit_value * TRADING_FEE
-                                net_value = exit_value - fee
-                                profit = net_value - current_position['position_size']
-                                profit_pct = (net_value / current_position['position_size'] - 1) * 100
-                                position_result = {
-                                    'entry_date': current_position['entry_date'],
-                                    'exit_date': latest.name,
-                                    'entry_price': current_position['entry_price'],
-                                    'exit_price': last_price,
-                                    'exit_reason': exit_reason,
-                                    'qty': current_position['qty'],
-                                    'pnl': profit,
-                                    'pnl_pct': profit_pct,
-                                    'entry_confidence': current_position.get('confidence', 0),
-                                    'exit_confidence': latest['pred_proba'] if exit_reason == 'Signal' else 0
-                                }
-                                positions.append(position_result)
-                                bot_state['positions'].append(position_result)
-                                current_position = None
-                                bot_state['current_position'] = None
-                                msg = (f"🔴 <b>BOT EXIT {exit_reason}</b>\n"
-                                       f"Pair: {PAIR}\n"
-                                       f"Timeframe: {TIMEFRAME}\n"
-                                       f"💰 Exit: ${last_price:.2f}\n"
-                                       f"{'🟢' if profit > 0 else '🔴'} P/L: ${profit:.2f} ({profit_pct:.2f}%)\n"
-                                       f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-                                print(msg)
-                                send_telegram(msg)
-                                log_telegram('INFO', f'EXIT {exit_reason}', {
-                                    'exit_price': last_price,
-                                    'pnl': profit,
-                                    'pnl_pct': profit_pct
-                                })
-                                trade_counter += 1
-                                # Kirim ringkasan hasil setiap 10 trade atau setiap exit
-                                if trade_counter % 10 == 0 or trade_counter == 1:
-                                    # Hitung ringkasan
-                                    pos_df = pd.DataFrame(bot_state['positions'])
-                                    if not pos_df.empty:
-                                        win_trades = len(pos_df[pos_df['pnl'] > 0])
-                                        loss_trades = len(pos_df[pos_df['pnl'] <= 0])
-                                        total_trades = len(pos_df)
-                                        win_rate = win_trades / total_trades * 100 if total_trades > 0 else 0
-                                        avg_profit = pos_df['pnl_pct'].mean()
-                                        max_profit = pos_df['pnl_pct'].max()
-                                        max_loss = pos_df['pnl_pct'].min()
-                                        profit_factor = abs(pos_df[pos_df['pnl'] > 0]['pnl'].sum() / pos_df[pos_df['pnl'] < 0]['pnl'].sum()) if len(pos_df[pos_df['pnl'] < 0]) > 0 else float('inf')
-                                        net_profit = pos_df['pnl'].sum()
-                                        summary_msg = (
-                                            f"📊 <b>RINGKASAN TRADING</b>\n"
-                                            f"Pair: {PAIR}\n"
-                                            f"Timeframe: {TIMEFRAME}\n"
-                                            f"Total Trades: {total_trades}\n"
-                                            f"Win Rate: {win_rate:.2f}%\n"
-                                            f"Avg Profit: {avg_profit:.2f}%\n"
-                                            f"Max Profit: {max_profit:.2f}%\n"
-                                            f"Max Loss: {max_loss:.2f}%\n"
-                                            f"Profit Factor: {profit_factor:.2f}\n"
-                                            f"Net Profit: ${net_profit:.2f}\n"
-                                            f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                                        )
-                                        send_telegram(summary_msg)
-                                        log_telegram('INFO', 'Ringkasan trading', {
-                                            'Total Trades': total_trades,
-                                            'Win Rate': f'{win_rate:.2f}%',
-                                            'Net Profit': f'${net_profit:.2f}'
-                                        })
-                            except Exception as e:
-                                print(f"[!] Exit order gagal: {e}")
-                                log_telegram('ERROR', 'Order SELL gagal', {'error': str(e)})
-                                send_telegram(f"⚠️ <b>Bot Exit Error</b>\n{PAIR} {TIMEFRAME}\n{e}")
-                except Exception as e:
-                    print(f"[!!] Error balance: {e}")
-                    log_telegram('ERROR', 'Error balance', {'error': str(e)})
-                    send_telegram(f"⚠️ <b>Bot Balance Error</b>\n{PAIR} {TIMEFRAME}\n{e}")
-            try:
-                joblib.dump(bot_state, state_file)
-            except Exception as e:
-                print(f"Error saving bot state: {e}")
-        except Exception as e:
-            print(f"[!!] Error main loop: {e}")
-            log_telegram('ERROR', 'Error di main loop', {'error': str(e)})
-            send_telegram(f"[Bot Error]\n{PAIR} {TIMEFRAME}\n{e}")
-        # Jeda sesuai timeframe
-        sleep_seconds = 60
-        if TIMEFRAME.endswith('m'):
-            sleep_seconds = int(TIMEFRAME.replace('m', '')) * 60 // 10
-        elif TIMEFRAME.endswith('h'):
-            sleep_seconds = int(TIMEFRAME.replace('h', '')) * 3600 // 10
-        print(f"Sleeping for {sleep_seconds} seconds...")
-        time.sleep(sleep_seconds)
-    # Tidak ada print selesai, karena loop berjalan terus
-else:
-    print("--- Simulasi selesai. Aktifkan IS_LIVE untuk menjalankan trading nyata. ---")
+    # ... existing code ...
+    if IS_LIVE_DEFAULT:
+        print("--- Simulasi selesai. Aktifkan IS_LIVE untuk menjalankan trading nyata. ---")
+    else:
+        print("--- Simulasi selesai. Aktifkan IS_LIVE untuk menjalankan trading nyata. ---")
