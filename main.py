@@ -1259,6 +1259,19 @@ def print_backtest_results(positions_df, initial_capital, final_capital, pair, t
     """
     Print hasil backtest dengan summary yang lebih lengkap dan informatif
     """
+    # Cek data kosong lebih awal
+    if df is None or df.empty or len(positions_df) == 0:
+        error_msg = (
+            f"❌ <b>HASIL BACKTEST TIDAK VALID</b>\n\n"
+            f"Pair: <b>{pair}</b> | TF: <b>{timeframe}</b>\n"
+            f"Data backtest kosong atau tidak berhasil di-load.\n"
+            f"Cek koneksi, parameter DATA_LIMIT, atau proses feature engineering/labeling.\n\n"
+            f"📅 Backtest: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        print("\n----- Hasil Backtest TIDAK VALID -----")
+        print(error_msg)
+        send_telegram(error_msg)
+        return
     profit = final_capital - initial_capital
     profit_pct = (final_capital / initial_capital - 1) * 100
 
