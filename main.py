@@ -79,8 +79,8 @@ TIMEFRAME = '1h'             # <---- Timeframe optimal berdasarkan analisis
 DATA_LIMIT = 500
 
 # --- API Keys ---
-API_KEY = 'NWWNydAQ0FJaq2oq2HGmHTLBPh4emr0hxGDbEPwQt4XURQN8XTotx9OiTUnTa9dO'
-API_SECRET = '5f2c80d8c18c46e482ebf431bcf7113b'
+API_KEY = 'Jy2D5DAbVmti5ZkuiccnUKzdgmbRapji1iEgiGYWYAaPnY3UmLk0dAdDUf5msHVv'
+API_SECRET = 'z2vAgYukrEsSBBhuw7Yiex3JtFVikG8sZR3fnwZQHYttXire59zQgH50ReU78m7X'
 
 # --- Risk Management ---
 MIN_BALANCE = 10            # Minimal usdt yang harus tersedia untuk entry
