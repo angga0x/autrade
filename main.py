@@ -1339,7 +1339,7 @@ def print_backtest_results(positions_df, initial_capital, final_capital, pair, t
             # Get historical data for the HODL period
             first_entry = pd.to_datetime(positions_df['entry_date'].iloc[0])
             last_exit = pd.to_datetime(positions_df['exit_date'].iloc[-1])
-            df_hodl = get_data_ccxt(symbol=pair, timeframe=timeframe, limit=n_candle)
+            df_hodl = get_data_ccxt(symbol=pair, timeframe=timeframe, limit=max(1, n_candle))
             df_hodl = df_hodl.loc[df_hodl.index >= first_entry]
             if not df_hodl.empty:
                 first_price = df_hodl['close'].iloc[0]
