@@ -1,0 +1,11 @@
+tensorflow==2.12.0
+ccxt
+pandas
+scikit-learn
+ta
+numpy
+matplotlib
+seaborn
+joblib
+xgboost
+requests 
