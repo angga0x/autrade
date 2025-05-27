@@ -1255,148 +1255,147 @@ def plot_trade_analysis(positions_df, pair, timeframe):
     plt.savefig(f"{OUTPUT_DIR}/trade_analysis_{pair.replace('/','_')}_{timeframe}_{timestamp}.png")
     plt.close()
 
-def print_backtest_results(positions_df, initial_capital, final_capital, pair, timeframe):
+def print_backtest_results(positions_df, initial_capital, final_capital, pair, timeframe, df=None):
     """
-    Print hasil backtest
+    Print hasil backtest dengan summary yang lebih lengkap dan informatif
     """
     profit = final_capital - initial_capital
     profit_pct = (final_capital / initial_capital - 1) * 100
-    
+
+    # Periode backtest
+    if df is not None and not df.empty:
+        period_start = df.index[0].strftime('%Y-%m-%d %H:%M')
+        period_end = df.index[-1].strftime('%Y-%m-%d %H:%M')
+        n_candle = len(df)
+    else:
+        period_start = period_end = '-'
+        n_candle = 0
+
     # Hitung total fee yang dibayarkan
     total_fee = 0
     entry_fee = 0
     exit_fee = 0
-    
+    avg_trade_duration = 0
+    risk_reward = 0
+    max_drawdown = 0
+    avg_profit = 0
+    avg_loss = 0
+    win_trades = loss_trades = total_trades = 0
+    win_rate = max_profit = max_loss = profit_factor = 0
+    hodl_return = 0
+    fee_pct = 0
+    net_profit_pct = profit_pct
+    avg_trades_per_day = 0
+    market_condition = 'UNKNOWN'
+    avg_duration_str = '-'
+
     if len(positions_df) > 0:
         win_trades = len(positions_df[positions_df['pnl'] > 0])
         loss_trades = len(positions_df[positions_df['pnl'] <= 0])
         total_trades = len(positions_df)
         win_rate = win_trades / total_trades * 100 if total_trades > 0 else 0
-        
-        avg_profit = positions_df['pnl_pct'].mean()
+        avg_profit = positions_df[positions_df['pnl'] > 0]['pnl_pct'].mean() if win_trades > 0 else 0
+        avg_loss = positions_df[positions_df['pnl'] <= 0]['pnl_pct'].mean() if loss_trades > 0 else 0
         max_profit = positions_df['pnl_pct'].max() 
         max_loss = positions_df['pnl_pct'].min()
-        
-        profit_factor = abs(positions_df[positions_df['pnl'] > 0]['pnl'].sum() / 
+        profit_factor = abs(positions_df[positions_df['pnl'] > 0]['pnl'].sum() / \
                            positions_df[positions_df['pnl'] < 0]['pnl'].sum()) if len(positions_df[positions_df['pnl'] < 0]) > 0 else float('inf')
-        
+        # Risk/reward ratio
+        if avg_loss != 0:
+            risk_reward = abs(avg_profit / avg_loss)
+        # Durasi rata-rata trade
+        if 'entry_date' in positions_df.columns and 'exit_date' in positions_df.columns:
+            entry_times = pd.to_datetime(positions_df['entry_date'])
+            exit_times = pd.to_datetime(positions_df['exit_date'])
+            avg_trade_duration = (exit_times - entry_times).mean()
+            if pd.notnull(avg_trade_duration):
+                total_seconds = avg_trade_duration.total_seconds()
+                if total_seconds < 3600:
+                    avg_duration_str = f"{int(total_seconds//60)} menit"
+                else:
+                    avg_duration_str = f"{total_seconds/3600:.1f} jam"
+        # Max drawdown
+        if df is not None and not df.empty:
+            equity_curve = (df['close'] / df['close'].iloc[0]) * initial_capital
+            roll_max = equity_curve.cummax()
+            drawdown = (equity_curve - roll_max) / roll_max
+            max_drawdown = drawdown.min() * 100
         # Summary by exit reason
         if 'exit_reason' in positions_df.columns:
             reason_summary = positions_df.groupby('exit_reason').agg({
                 'pnl': ['count', 'mean', 'sum'],
                 'pnl_pct': ['mean', 'min', 'max']
             })
-            
         # Calculate total fees - assuming entry size is TRADE_AMOUNT per trade
         entry_fee = total_trades * TRADE_AMOUNT * TRADING_FEE
         exit_fee = total_trades * TRADE_AMOUNT * (1 + avg_profit/100) * TRADING_FEE
         total_fee = entry_fee + exit_fee
         fee_pct = (total_fee / initial_capital) * 100
-        
         # Calculate net profit after fees (already included in backtest but showing separately)
         net_profit = profit
         net_profit_pct = profit_pct
-        
         # Calculate HODL return from first entry to last exit
         if len(positions_df) > 1:
             # Get historical data for the HODL period
             first_entry = pd.to_datetime(positions_df['entry_date'].iloc[0])
             last_exit = pd.to_datetime(positions_df['exit_date'].iloc[-1])
-            
-            # Fetch data from exchange
-            df_hodl = get_data_ccxt(symbol=pair, timeframe=timeframe, limit=DATA_LIMIT)
-            
-            # Find closest timestamps
+            df_hodl = get_data_ccxt(symbol=pair, timeframe=timeframe, limit=n_candle)
             df_hodl = df_hodl.loc[df_hodl.index >= first_entry]
-            
             if not df_hodl.empty:
                 first_price = df_hodl['close'].iloc[0]
-                # Find the closest date to last_exit that exists in df_hodl
                 last_idx = df_hodl.index.get_indexer([last_exit], method='nearest')[0]
                 last_price = df_hodl['close'].iloc[last_idx]
-                
                 hodl_return = ((last_price / first_price) - 1) * 100
             else:
                 hodl_return = 0
-        else:
-            hodl_return = 0
-    else:
-        win_trades = loss_trades = total_trades = 0
-        win_rate = avg_profit = max_profit = max_loss = profit_factor = 0
-        hodl_return = 0
-        total_fee = entry_fee = exit_fee = fee_pct = 0
-        net_profit = profit
-        net_profit_pct = profit_pct
-    
-    print("\n----- Hasil Backtest -----")
-    print(f"Pair: {pair} | Timeframe: {timeframe} | Target Threshold: {TARGET_THRESHOLD*100}%")
-    print(f"Modal Awal: ${initial_capital}")
-    print(f"Modal Akhir: ${final_capital:.2f}")
-    print(f"Profit/Loss: ${profit:.2f} ({profit_pct:.2f}%)")
-    print(f"Total Trades: {total_trades}")
-    
-    if total_trades > 0:
-        print(f"Win Rate: {win_rate:.2f}% ({win_trades}/{total_trades})")
-        print(f"Avg Profit: {avg_profit:.2f}%")
-        print(f"Max Profit: {max_profit:.2f}%")
-        print(f"Max Loss: {max_loss:.2f}%")
-        print(f"Profit Factor: {profit_factor:.2f}")
-        
-        # Fee analysis
-        print("\n----- Fee Analysis -----")
-        print(f"Total Fee: ${total_fee:.2f} ({fee_pct:.2f}% dari modal)")
-        print(f"Entry Fee: ${entry_fee:.2f}")
-        print(f"Exit Fee: ${exit_fee:.2f}")
-        print(f"Net Profit After Fee: ${net_profit:.2f} ({net_profit_pct:.2f}%)")
-        
-        # HODL comparison
-        print("\n----- HODL Comparison -----")
-        print(f"HODL Return: {hodl_return:.2f}%")
-        outperformance = net_profit_pct - hodl_return
-        print(f"Bot vs HODL: {outperformance:+.2f}% {'(OUTPERFORM)' if outperformance > 0 else '(UNDERPERFORM)'}")
-        
-        # Market condition analysis
+        # Rata-rata trade per hari
+        if df is not None and not df.empty:
+            n_days = (df.index[-1] - df.index[0]).total_seconds() / 86400
+            avg_trades_per_day = total_trades / n_days if n_days > 0 else 0
+        # Market condition
         if abs(hodl_return) < 1:
             market_condition = "SIDEWAYS"
         elif hodl_return > 0:
             market_condition = "UPTREND"
         else:
             market_condition = "DOWNTREND"
-        print(f"Market Condition: {market_condition}")
-        
-        if 'exit_reason' in positions_df.columns:
-            print("\n----- Exit Reason Analysis -----")
-            print(reason_summary)
-            
-        # Kirim ringkasan hasil ke Telegram
-        emoji_profit = "🟢" if profit_pct > 0 else "🔴"
-        emoji_market = "📈" if hodl_return > 0 else "📉" if hodl_return < 0 else "➡️"
-        emoji_comp = "🚀" if outperformance > 0 else "🐌"
-        
-        backtest_msg = (
-            f"📊 <b>HASIL BACKTEST</b>\n\n"
-            f"Pair: {pair}\n"
-            f"Timeframe: {timeframe}\n"
-            f"Market: {market_condition} {emoji_market}\n\n"
-            f"{emoji_profit} P/L: {profit_pct:.2f}%\n"
-            f"💰 Modal awal: ${initial_capital}\n"
-            f"💸 Modal akhir: ${final_capital:.2f}\n\n"
-            f"🎯 Win Rate: {win_rate:.2f}%\n"
-            f"📋 Total trades: {total_trades}\n"
-            f"📊 Profit factor: {profit_factor:.2f}\n\n"
-            f"🆚 HODL: {hodl_return:.2f}%\n"
-            f"{emoji_comp} Outperform: {outperformance:+.2f}%\n\n"
-            f"📅 Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        )
-        
-        send_telegram(backtest_msg)
-    
+    else:
+        hodl_return = 0
+        total_fee = entry_fee = exit_fee = fee_pct = 0
+        net_profit = profit
+        net_profit_pct = profit_pct
+        avg_trades_per_day = 0
+        market_condition = 'UNKNOWN'
+
+    # Format summary Telegram
+    summary_msg = (
+        f"📊 <b>HASIL BACKTEST</b>\n\n"
+        f"Pair: <b>{pair}</b> | TF: <b>{timeframe}</b>\n"
+        f"Periode: <b>{period_start}</b> s/d <b>{period_end}</b> ({n_candle} candle)\n"
+        f"Modal: <b>${initial_capital}</b> ➡️ <b>${final_capital:.2f}</b> (<b>{profit_pct:.2f}%</b>)\n"
+        f"Total trades: <b>{total_trades}</b> (avg <b>{avg_trades_per_day:.2f}</b>/hari)\n"
+        f"Win rate: <b>{win_rate:.2f}%</b>\n"
+        f"Profit factor: <b>{profit_factor:.2f}</b>\n"
+        f"Max drawdown: <b>{max_drawdown:.2f}%</b>\n"
+        f"Avg profit/trade: <b>{avg_profit:.2f}%</b>\n"
+        f"Avg loss/trade: <b>{avg_loss:.2f}%</b>\n"
+        f"Risk/reward: <b>{risk_reward:.2f}</b>\n"
+        f"Fee total: <b>${total_fee:.2f}</b> ({fee_pct:.2f}%)\n"
+        f"Durasi rata-rata trade: <b>{avg_duration_str}</b>\n\n"
+        f"HODL: <b>{hodl_return:.2f}%</b>\n"
+        f"Outperform: <b>{net_profit_pct - hodl_return:+.2f}%</b>\n"
+        f"Market: <b>{market_condition}</b> {'📈' if market_condition=='UPTREND' else '📉' if market_condition=='DOWNTREND' else '➡️'}\n\n"
+        f"📅 Backtest: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+    print("\n----- Hasil Backtest -----")
+    print(summary_msg)
+    send_telegram(summary_msg)
+
     # Simpan hasil ke CSV jika diminta
     if SAVE_RESULTS:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         if len(positions_df) > 0:
             positions_df.to_csv(f"{OUTPUT_DIR}/positions_{pair.replace('/','_')}_{timeframe}_{timestamp}.csv")
-        
         # Simpan summary ke file terpisah
         summary = {
             'pair': pair,
@@ -1409,26 +1408,28 @@ def print_backtest_results(positions_df, initial_capital, final_capital, pair, t
             'total_trades': total_trades,
             'win_rate': win_rate if total_trades > 0 else 0,
             'avg_profit': avg_profit if total_trades > 0 else 0,
+            'avg_loss': avg_loss if total_trades > 0 else 0,
             'max_profit': max_profit if total_trades > 0 else 0,
             'max_loss': max_loss if total_trades > 0 else 0,
             'profit_factor': profit_factor if total_trades > 0 else 0,
+            'risk_reward': risk_reward,
+            'max_drawdown': max_drawdown,
             'total_fee': total_fee,
+            'fee_pct': fee_pct,
             'hodl_return': hodl_return,
             'outperformance': net_profit_pct - hodl_return if total_trades > 0 else 0,
             'market_condition': market_condition if total_trades > 0 else 'UNKNOWN',
+            'avg_trades_per_day': avg_trades_per_day,
+            'avg_duration': avg_duration_str,
             'timestamp': timestamp
         }
-        
-        # Cek apakah file summary sudah ada
         summary_file = f"{OUTPUT_DIR}/backtest_summary.csv"
         if os.path.exists(summary_file):
             summary_df = pd.read_csv(summary_file)
             summary_df = pd.concat([summary_df, pd.DataFrame([summary])], ignore_index=True)
         else:
             summary_df = pd.DataFrame([summary])
-        
         summary_df.to_csv(summary_file, index=False)
-        
         print(f"Hasil backtest disimpan ke {OUTPUT_DIR}")
 
 def get_multi_timeframe_data(symbol=PAIR, base_timeframe=TIMEFRAME, limit=DATA_LIMIT):
